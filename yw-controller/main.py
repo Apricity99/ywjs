@@ -17,6 +17,11 @@ STATE_TTL_SECONDS = 300
 TASK_LABEL_KEY = "yw.insitu/task"
 KANIKO_IMAGE = os.getenv("KANIKO_IMAGE", "gcr.io/kaniko-project/executor:latest")
 KANIKO_INSECURE = os.getenv("KANIKO_INSECURE", "true").lower() in ("1", "true", "yes")
+INSECURE_REGISTRIES = [
+    r.strip()
+    for r in os.getenv("INSECURE_REGISTRIES", "121.250.211.145:5000").split(",")
+    if r.strip()
+]
 
 app = FastAPI(title="YW Controller", version="1.0.0")
 
@@ -216,7 +221,10 @@ def create_kaniko_job(build: BuildSpec, task_name: str) -> str:
         "--verbosity=info",
     ]
     if KANIKO_INSECURE:
-        args.extend(["--insecure", "--skip-tls-verify"])
+        args.extend(["--insecure", "--skip-tls-verify", "--insecure-pull", "--skip-tls-verify-pull"])
+        for reg in INSECURE_REGISTRIES:
+            args.append(f"--insecure-registry={reg}")
+            args.append(f"--skip-tls-verify-registry={reg}")
     for k, v in (build.build_args or {}).items():
         args.append(f"--build-arg={k}={v}")
 
