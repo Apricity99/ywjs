@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: yw-agent
+  namespace: yw-insitu
+spec:
+  selector:
+    matchLabels:
+      app: yw-agent
+  template:
+    metadata:
+      labels:
+        app: yw-agent
+    spec:
+      # 只在 ARM64 节点（树莓派）上跑
+      nodeSelector:
+        kubernetes.io/arch: arm64
+      containers:
+      - name: agent
+        image: 121.250.211.145:5000/yw-agent:arm64
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: REPORT_ENDPOINT
+          value: "http://yw-controller.yw-insitu.svc.cluster.local:8080/report"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: "20m"
+            memory: "32Mi"
+          limits:
+            cpu: "200m"
+            memory: "128Mi"

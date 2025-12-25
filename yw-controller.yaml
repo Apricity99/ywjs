@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: yw-controller
+  namespace: yw-insitu
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: yw-controller
+  namespace: yw-insitu
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: yw-controller
+  namespace: yw-insitu
+subjects:
+  - kind: ServiceAccount
+    name: yw-controller
+    namespace: yw-insitu
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: yw-controller
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yw-controller
+  namespace: yw-insitu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yw-controller
+  template:
+    metadata:
+      labels:
+        app: yw-controller
+    spec:
+      serviceAccountName: yw-controller
+      nodeName: master
+      tolerations:
+        - key: "node-role.kubernetes.io/master"
+          operator: "Exists"
+          effect: "NoSchedule"
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: controller
+          image: 121.250.211.145:5000/yw-controller:amd64
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 8080
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: yw-controller
+  namespace: yw-insitu
+spec:
+  selector:
+    app: yw-controller
+  type: NodePort
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 30080
+      protocol: TCP
+      name: http

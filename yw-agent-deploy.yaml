@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: yw-agent-master
+  namespace: yw-insitu
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: yw-agent-master
+  template:
+    metadata:
+      labels:
+        app: yw-agent-master
+    spec:
+      nodeName: master   # ✅ 只跑在 master 上
+      tolerations:
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      containers:
+      - name: agent
+        image: apricity99/yw-agent:amd64
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: REPORT_ENDPOINT
+          value: "http://yw-controller.yw-insitu.svc.cluster.local:8080/report"
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        resources:
+          requests:
+            cpu: "20m"
+            memory: "32Mi"
