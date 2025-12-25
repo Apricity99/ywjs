@@ -116,6 +116,7 @@ class BuildSpec(BaseModel):
     node_selector: Dict[str, str] = Field(default_factory=lambda: {"kubernetes.io/arch": "arm64"})
     timeout_seconds: int = 600
     wait_for_completion: bool = True
+    init_image: str = os.getenv("INIT_IMAGE", "121.250.211.145:5000/python:3.11-slim")
 
 
 class DeploySpec(TaskCreateRequest):
@@ -214,8 +215,36 @@ def create_kaniko_job(build: BuildSpec, task_name: str) -> str:
     timestamp = int(time.time())
     job_name = f"build-{task_name}-{timestamp}"
 
+    # If context is http (not https), Kaniko does not support it directly.
+    # Use an init container to download and extract into /workspace/src, then use dir:// context.
+    use_http_init = build.context.startswith("http://")
+    kaniko_context = build.context
+    context_mounts = []
+    volumes = []
+    init_containers = []
+
+    if use_http_init:
+        kaniko_context = "dir:///workspace/src"
+        context_mounts = [client.V1VolumeMount(name="context", mount_path="/workspace/src")]
+        volumes.append(client.V1Volume(name="context", empty_dir=client.V1EmptyDirVolumeSource()))
+        init_cmd = (
+            "import urllib.request, tarfile, io, os; "
+            f"url='{build.context}'; "
+            "data=urllib.request.urlopen(url).read(); "
+            "os.makedirs('/workspace/src', exist_ok=True); "
+            "tarfile.open(fileobj=io.BytesIO(data), mode='r:gz').extractall('/workspace/src')"
+        )
+        init_containers.append(
+            client.V1Container(
+                name="fetch-context",
+                image=build.init_image,
+                command=["python", "-c", init_cmd],
+                volume_mounts=context_mounts,
+            )
+        )
+
     args = [
-        f"--context={build.context}",
+        f"--context={kaniko_context}",
         f"--dockerfile={build.dockerfile}",
         f"--destination={build.destination}:{build.tag}",
         "--verbosity=info",
@@ -233,13 +262,16 @@ def create_kaniko_job(build: BuildSpec, task_name: str) -> str:
         image=KANIKO_IMAGE,
         args=args,
         env=[client.V1EnvVar(name="DOCKER_CONFIG", value="/kaniko/.docker/")],
+        volume_mounts=context_mounts,
     )
 
     pod_spec = client.V1PodSpec(
+        init_containers=init_containers,
         containers=[container],
         restart_policy="Never",
         service_account_name="yw-controller",
         node_selector=build.node_selector,
+        volumes=volumes,
     )
 
     template = client.V1PodTemplateSpec(
