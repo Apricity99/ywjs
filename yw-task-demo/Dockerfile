@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM 121.250.211.145:5000/python:3.11-slim
 
 WORKDIR /app
 COPY main.py /app/main.py
