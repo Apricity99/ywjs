@@ -137,6 +137,18 @@ class RegistryTags(BaseModel):
     tags: List[str] | None
 
 
+class TaskHistoryEntry(BaseModel):
+    name: str
+    namespace: str
+    image: str
+    replicas: int
+    ready_replicas: int
+    available_replicas: int
+    nodes: List[str]
+    deleted_at: float
+    status: str = "deleted"
+
+
 class BuildSpec(BaseModel):
     context: str  # git repo URL or tarball URL supported by kaniko
     dockerfile: str = "Dockerfile"
@@ -183,6 +195,12 @@ def get_batch_client():
         get_k8s_clients()
     app.state.batch_v1 = client.BatchV1Api()
     return app.state.batch_v1
+
+
+def get_history_store() -> List[TaskHistoryEntry]:
+    if not hasattr(app.state, "history"):
+        app.state.history = []
+    return app.state.history  # type: ignore
 
 
 def build_node_affinity(node_names: List[str]) -> client.V1NodeAffinity:
@@ -553,10 +571,54 @@ def get_task(name: str):
 @app.delete("/tasks/{name}")
 def delete_task(name: str):
     apps_v1, _ = get_k8s_clients()
+    batch_v1 = get_batch_client()
+    # collect current info for history
+    try:
+        dep = apps_v1.read_namespaced_deployment(name=name, namespace=NAMESPACE)
+        task_info = deployment_to_task_info(dep)
+        pods = list_pods_for_task(name)
+        nodes = [p.node for p in pods if p.node] if pods else []
+        history = get_history_store()
+        history.append(
+            TaskHistoryEntry(
+                name=task_info.name,
+                namespace=task_info.namespace,
+                image=task_info.image,
+                replicas=task_info.replicas,
+                ready_replicas=task_info.ready_replicas,
+                available_replicas=task_info.available_replicas,
+                nodes=nodes,
+                deleted_at=time.time(),
+            )
+        )
+        if len(history) > 200:
+            del history[0 : len(history) - 200]
+    except ApiException:
+        pass
+
     try:
         apps_v1.delete_namespaced_deployment(name=name, namespace=NAMESPACE)
     except ApiException as e:
         raise HTTPException(status_code=e.status or 500, detail=e.reason)
+
+    # cleanup pods
+    try:
+        label_selector = f"{TASK_LABEL_KEY}={name}"
+        pods = client.CoreV1Api().list_namespaced_pod(namespace=NAMESPACE, label_selector=label_selector)
+        for pod in pods.items:
+            client.CoreV1Api().delete_namespaced_pod(pod.metadata.name, namespace=NAMESPACE)
+    except ApiException:
+        pass
+
+    # cleanup build jobs (name starts with build-{task}-)
+    try:
+        jobs = batch_v1.list_namespaced_job(namespace=NAMESPACE)
+        for job in jobs.items:
+            if job.metadata.name.startswith(f"build-{name}-"):
+                batch_v1.delete_namespaced_job(job.metadata.name, namespace=NAMESPACE, propagation_policy="Background")
+    except ApiException:
+        pass
+
     return {"ok": True}
 
 
@@ -578,6 +640,11 @@ def registry_catalog():
 @app.get("/registry/{repo}/tags", response_model=RegistryTags)
 def registry_tags(repo: str):
     return fetch_registry_tags(repo)
+
+
+@app.get("/tasks/history", response_model=List[TaskHistoryEntry])
+def get_task_history():
+    return list(get_history_store())
 
 
 # ------------------------------------------------------------------------------
