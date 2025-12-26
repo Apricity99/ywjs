@@ -3,6 +3,7 @@ import time
 from typing import Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException
+import requests
 from kubernetes import client, config
 from kubernetes.client import ApiException
 from kubernetes.config.config_exception import ConfigException
@@ -22,6 +23,8 @@ INSECURE_REGISTRIES = [
     for r in os.getenv("INSECURE_REGISTRIES", "121.250.211.145:5000").split(",")
     if r.strip()
 ]
+REGISTRY_ADDR = os.getenv("REGISTRY_ADDR", "121.250.211.145:5000")
+REGISTRY_SCHEME = os.getenv("REGISTRY_SCHEME", "http")
 
 app = FastAPI(title="YW Controller", version="1.0.0")
 
@@ -118,6 +121,15 @@ class PodBrief(BaseModel):
 class TaskStatus(BaseModel):
     task: TaskInfo
     pods: List[PodBrief]
+
+
+class RegistryCatalog(BaseModel):
+    repositories: List[str]
+
+
+class RegistryTags(BaseModel):
+    name: str
+    tags: List[str] | None
 
 
 class BuildSpec(BaseModel):
@@ -246,6 +258,33 @@ def list_pods_for_task(task_name: str) -> List[PodBrief]:
             )
         )
     return result
+
+
+def registry_base_url() -> str:
+    return f"{REGISTRY_SCHEME}://{REGISTRY_ADDR}"
+
+
+def fetch_registry_catalog() -> RegistryCatalog:
+    url = f"{registry_base_url()}/v2/_catalog"
+    try:
+        resp = requests.get(url, timeout=5, verify=False)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry catalog fetch failed: {e}")
+    data = resp.json()
+    repos = data.get("repositories", [])
+    return RegistryCatalog(repositories=repos)
+
+
+def fetch_registry_tags(repo: str) -> RegistryTags:
+    url = f"{registry_base_url()}/v2/{repo}/tags/list"
+    try:
+        resp = requests.get(url, timeout=5, verify=False)
+        resp.raise_for_status()
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Registry tags fetch failed: {e}")
+    data = resp.json()
+    return RegistryTags(name=data.get("name", repo), tags=data.get("tags"))
 
 
 def create_kaniko_job(build: BuildSpec, task_name: str) -> str:
@@ -516,6 +555,19 @@ def get_task_status(name: str):
     task = get_task(name)
     pods = list_pods_for_task(name)
     return TaskStatus(task=task, pods=pods)
+
+
+# ------------------------------------------------------------------------------
+# Registry helpers
+# ------------------------------------------------------------------------------
+@app.get("/registry/catalog", response_model=RegistryCatalog)
+def registry_catalog():
+    return fetch_registry_catalog()
+
+
+@app.get("/registry/{repo}/tags", response_model=RegistryTags)
+def registry_tags(repo: str):
+    return fetch_registry_tags(repo)
 
 
 # ------------------------------------------------------------------------------
