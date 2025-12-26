@@ -53,6 +53,11 @@ class Report(BaseModel):
     node: str
     cpu_usage: float = Field(..., ge=0.0, le=1.0)
     mem_usage: float = Field(..., ge=0.0, le=1.0)
+    arch: Optional[str] = None
+    role: Optional[str] = None
+    disk_free_pct: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    net_rtt_ms: Optional[float] = None
+    temp_c: Optional[float] = None
     extra: Optional[dict] = None
 
 
@@ -403,6 +408,11 @@ def report_state(r: Report):
     node_states[r.node] = {
         "cpu_usage": r.cpu_usage,
         "mem_usage": r.mem_usage,
+        "arch": r.arch,
+        "role": r.role,
+        "disk_free_pct": r.disk_free_pct,
+        "net_rtt_ms": r.net_rtt_ms,
+        "temp_c": r.temp_c,
         "extra": r.extra or {},
         "ts": time.time(),
     }
