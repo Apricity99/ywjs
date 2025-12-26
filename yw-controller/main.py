@@ -107,6 +107,19 @@ class TaskInfo(BaseModel):
     labels: Dict[str, str] = {}
 
 
+class PodBrief(BaseModel):
+    name: str
+    phase: str
+    ready: bool
+    node: Optional[str] = None
+    start_time: Optional[float] = None
+
+
+class TaskStatus(BaseModel):
+    task: TaskInfo
+    pods: List[PodBrief]
+
+
 class BuildSpec(BaseModel):
     context: str  # git repo URL or tarball URL supported by kaniko
     dockerfile: str = "Dockerfile"
@@ -208,6 +221,31 @@ def deployment_to_task_info(dep: client.V1Deployment) -> TaskInfo:
         allowed_nodes=allowed_nodes,
         labels=dep.metadata.labels or {},
     )
+
+
+def list_pods_for_task(task_name: str) -> List[PodBrief]:
+    _, core_v1 = get_k8s_clients()
+    selector = f"{TASK_LABEL_KEY}={task_name}"
+    try:
+        pods = core_v1.list_namespaced_pod(namespace=NAMESPACE, label_selector=selector)
+    except ApiException as e:
+        raise HTTPException(status_code=e.status or 500, detail=e.reason)
+
+    result: List[PodBrief] = []
+    for pod in pods.items:
+        cs = pod.status.container_statuses or []
+        ready = all(c.ready for c in cs) if cs else False
+        start_time = pod.status.start_time.timestamp() if pod.status.start_time else None
+        result.append(
+            PodBrief(
+                name=pod.metadata.name,
+                phase=pod.status.phase or "Unknown",
+                ready=ready,
+                node=(pod.spec.node_name or None),
+                start_time=start_time,
+            )
+        )
+    return result
 
 
 def create_kaniko_job(build: BuildSpec, task_name: str) -> str:
@@ -471,6 +509,13 @@ def delete_task(name: str):
     except ApiException as e:
         raise HTTPException(status_code=e.status or 500, detail=e.reason)
     return {"ok": True}
+
+
+@app.get("/tasks/{name}/status", response_model=TaskStatus)
+def get_task_status(name: str):
+    task = get_task(name)
+    pods = list_pods_for_task(name)
+    return TaskStatus(task=task, pods=pods)
 
 
 # ------------------------------------------------------------------------------
